@@ -13,6 +13,10 @@ export default function VideoGrid({
   messages = [],
   sendMessage,
   layoutMode = "auto",
+  startScreenShare,
+  stopScreenShare,
+  isScreenSharing = false,
+  onLeave,
 }) {
   const brand = getBrandConfig();
   const styles = useMemo(() => getStyles(brand), [brand]);
@@ -24,8 +28,60 @@ export default function VideoGrid({
   const [text, setText] = useState("");
 
   const [isInviteOpen, setIsInviteOpen] = useState(false);
-  const [guestNameInput, setGuestNameInput] = useState("");
-  const [copied, setCopied] = useState(false);
+  const [invitedGuests, setInvitedGuests] = useState(() => {
+    try {
+      const room = inviteUrl ? new URL(inviteUrl).searchParams.get("room") || "" : "";
+      return JSON.parse(localStorage.getItem(`chatza_invited_${room}`) || "[]");
+    } catch {
+      return [];
+    }
+  });
+  const [newGuestName, setNewGuestName] = useState("");
+  const [copiedGuestId, setCopiedGuestId] = useState(null);
+
+  const roomId = useMemo(() => {
+    if (!inviteUrl) return "";
+    try {
+      return new URL(inviteUrl).searchParams.get("room") || "";
+    } catch {
+      return "";
+    }
+  }, [inviteUrl]);
+
+  useEffect(() => {
+    if (!roomId) return;
+    try {
+      localStorage.setItem(`chatza_invited_${roomId}`, JSON.stringify(invitedGuests));
+    } catch {}
+  }, [invitedGuests, roomId]);
+
+  const getGuestStatus = (guestName) => {
+    const cleanName = guestName.trim().toLowerCase();
+    const activePeer = remoteStreams.find(
+      (p) => p.name?.trim().toLowerCase() === cleanName
+    );
+    if (!activePeer) return "invited";
+    if (iceState === "connected" || iceState === "completed") return "connected";
+    if (iceState === "checking" || iceState === "connecting") return "connecting";
+    if (iceState === "failed" || iceState === "disconnected") return "disconnected";
+    return "joined";
+  };
+
+  const sessionStatusText = useMemo(() => {
+    if (remoteStreams.length === 0) return "Waiting for Guest";
+    if (iceState === "connected" || iceState === "completed") return "Guest Connected";
+    if (iceState === "checking" || iceState === "connecting") return "Connecting…";
+    if (iceState === "failed" || iceState === "disconnected") return "Connection Lost";
+    return "Guest Joined";
+  }, [remoteStreams, iceState]);
+
+  const sessionStatusColor = useMemo(() => {
+    if (remoteStreams.length === 0) return "#71717a";
+    if (iceState === "connected" || iceState === "completed") return "#10b981";
+    if (iceState === "checking" || iceState === "connecting") return "#f59e0b";
+    if (iceState === "failed" || iceState === "disconnected") return "#ef4444";
+    return "#3b82f6";
+  }, [remoteStreams, iceState]);
 
   const urlGuest =
     new URLSearchParams(window.location.search).get("guest") || "";
@@ -108,56 +164,69 @@ export default function VideoGrid({
 
   const handleInvite = () => {
     setIsInviteOpen(true);
-    setCopied(false);
   };
 
-  const generatedInviteUrl = useMemo(() => {
-    if (!inviteUrl) return "";
-    const g = guestNameInput.trim();
-    return g
+  const handleAddGuest = () => {
+    const name = newGuestName.trim();
+    if (!name) return;
+
+    const url = inviteUrl
       ? `${inviteUrl}${
           inviteUrl.includes("?") ? "&" : "?"
-        }guest=${encodeURIComponent(g)}`
-      : inviteUrl;
-  }, [inviteUrl, guestNameInput]);
+        }guest=${encodeURIComponent(name)}`
+      : "";
 
-  const handleCopyLink = () => {
-    if (!generatedInviteUrl) return;
+    const newGuest = {
+      id: Math.random().toString(36).substring(2, 9),
+      name,
+      url,
+    };
+
+    setInvitedGuests((prev) => [...prev, newGuest]);
+    setNewGuestName("");
+  };
+
+  const handleCopyGuestLink = (guest) => {
+    if (!guest.url) return;
     try {
-      navigator.clipboard?.writeText(generatedInviteUrl).then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
+      navigator.clipboard?.writeText(guest.url).then(() => {
+        setCopiedGuestId(guest.id);
+        setTimeout(() => setCopiedGuestId(null), 2000);
       }).catch(() => {
         const input = document.createElement("input");
-        input.value = generatedInviteUrl;
+        input.value = guest.url;
         document.body.appendChild(input);
         input.select();
         document.execCommand("copy");
         document.body.removeChild(input);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
+        setCopiedGuestId(guest.id);
+        setTimeout(() => setCopiedGuestId(null), 2000);
       });
     } catch {
       const input = document.createElement("input");
-      input.value = generatedInviteUrl;
+      input.value = guest.url;
       document.body.appendChild(input);
       input.select();
       document.execCommand("copy");
       document.body.removeChild(input);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setCopiedGuestId(guest.id);
+      setTimeout(() => setCopiedGuestId(null), 2000);
     }
   };
 
-  const handleShareLink = () => {
-    if (!generatedInviteUrl) return;
+  const handleShareGuestLink = (guest) => {
+    if (!guest.url) return;
     if (navigator.share) {
       navigator.share({
         title: `Join ${brand?.name || "Chatza Call"}`,
-        text: `Join my private call on ${brand?.name || "Chatza"}!`,
-        url: generatedInviteUrl,
+        text: `Join my private call on ${brand?.name || "Chatza"} as ${guest.name}!`,
+        url: guest.url,
       }).catch(() => {});
     }
+  };
+
+  const handleRemoveGuest = (id) => {
+    setInvitedGuests((prev) => prev.filter((g) => g.id !== id));
   };
 
   // ✅ RULES:
@@ -237,71 +306,102 @@ export default function VideoGrid({
 
   return (
     <div style={styles.wrapper}>
+      {/* Session Status HUD */}
+      <div style={styles.hudContainer}>
+        <div style={styles.hudPill}>
+          <div style={{ ...styles.statusDot, color: sessionStatusColor, background: sessionStatusColor }} />
+          <span style={styles.hudText}>{sessionStatusText}</span>
+        </div>
+
+        <div style={styles.hudPill}>
+          <div style={{ ...styles.statusDot, color: signalingConnected ? "#10b981" : "#ef4444", background: signalingConnected ? "#10b981" : "#ef4444" }} />
+          <span style={styles.hudText}>
+            {signalingConnected ? "Server Online" : "Server Offline"}
+          </span>
+        </div>
+      </div>
+
       <div style={styles.stage}>
         <div style={styles.stageInner}>
           {useGrid4 ? (
             <div style={styles.grid4}>
-              {tiles.map((tile) => (
-                <Tile key={tile.key} label={tile.label} styles={styles}>
-                  {tile.kind === "local" ? (
-                    <video
-                      ref={localRef}
-                      autoPlay
-                      muted
-                      playsInline
-                      style={{ ...styles.video, transform: "scaleX(-1)" }}
-                    />
-                  ) : tile.kind === "remote" ? (
-                    <video
-                      ref={(el) => {
-                        if (!tile.peerId) return;
-                        if (!el) {
-                          remoteVideoRefs.current.delete(tile.peerId);
-                          return;
-                        }
-                        remoteVideoRefs.current.set(tile.peerId, el);
-                      }}
-                      autoPlay
-                      playsInline
-                      style={styles.video}
-                    />
-                  ) : (
-                    <div style={styles.emptyOverlay}>—</div>
-                  )}
-                </Tile>
-              ))}
+              {tiles.map((tile) => {
+                const isLocal = tile.kind === "local";
+                const isRemote = tile.kind === "remote";
+                const activeStreamObj = isRemote ? remoteStreams.find(s => s.peerId === tile.peerId) : null;
+                const micActive = isLocal ? micOn : isRemote ? (activeStreamObj?.stream?.getAudioTracks()?.some(t => t.enabled) !== false) : false;
+                const camActive = isLocal ? camOn : isRemote ? (activeStreamObj?.stream?.getVideoTracks()?.some(t => t.enabled) !== false) : false;
+
+                return (
+                  <Tile key={tile.key} label={tile.label} styles={styles} micActive={micActive} camActive={camActive}>
+                    {isLocal ? (
+                      <video
+                        ref={localRef}
+                        autoPlay
+                        muted
+                        playsInline
+                        style={{ ...styles.video, transform: "scaleX(-1)" }}
+                      />
+                    ) : isRemote ? (
+                      <video
+                        ref={(el) => {
+                          if (!tile.peerId) return;
+                          if (!el) {
+                            remoteVideoRefs.current.delete(tile.peerId);
+                            return;
+                          }
+                          remoteVideoRefs.current.set(tile.peerId, el);
+                        }}
+                        autoPlay
+                        playsInline
+                        style={styles.video}
+                      />
+                    ) : (
+                      <div style={styles.emptyOverlay}>—</div>
+                    )}
+                  </Tile>
+                );
+              })}
             </div>
           ) : (
             <div style={styles.row}>
-              {tiles.slice(0, 2).map((tile) => (
-                <Tile key={tile.key} label={tile.label} styles={styles}>
-                  {tile.kind === "local" ? (
-                    <video
-                      ref={localRef}
-                      autoPlay
-                      muted
-                      playsInline
-                      style={{ ...styles.video, transform: "scaleX(-1)" }}
-                    />
-                  ) : tile.kind === "remote" ? (
-                    <video
-                      ref={(el) => {
-                        if (!tile.peerId) return;
-                        if (!el) {
-                          remoteVideoRefs.current.delete(tile.peerId);
-                          return;
-                        }
-                        remoteVideoRefs.current.set(tile.peerId, el);
-                      }}
-                      autoPlay
-                      playsInline
-                      style={styles.video}
-                    />
-                  ) : (
-                    <div style={styles.emptyOverlay}>—</div>
-                  )}
-                </Tile>
-              ))}
+              {tiles.slice(0, 2).map((tile) => {
+                const isLocal = tile.kind === "local";
+                const isRemote = tile.kind === "remote";
+                const activeStreamObj = isRemote ? remoteStreams.find(s => s.peerId === tile.peerId) : null;
+                const micActive = isLocal ? micOn : isRemote ? (activeStreamObj?.stream?.getAudioTracks()?.some(t => t.enabled) !== false) : false;
+                const camActive = isLocal ? camOn : isRemote ? (activeStreamObj?.stream?.getVideoTracks()?.some(t => t.enabled) !== false) : false;
+
+                return (
+                  <Tile key={tile.key} label={tile.label} styles={styles} micActive={micActive} camActive={camActive}>
+                    {isLocal ? (
+                      <video
+                        ref={localRef}
+                        autoPlay
+                        muted
+                        playsInline
+                        style={{ ...styles.video, transform: "scaleX(-1)" }}
+                      />
+                    ) : isRemote ? (
+                      <video
+                        ref={(el) => {
+                          if (!tile.peerId) return;
+                          if (!el) {
+                            remoteVideoRefs.current.delete(tile.peerId);
+                            return;
+                          }
+                          remoteVideoRefs.current.set(tile.peerId, el);
+                        }}
+                        autoPlay
+                        playsInline
+                        style={styles.video}
+                      />
+                    ) : (
+                      <div style={styles.emptyOverlay}>—</div>
+                    )}
+                  </Tile>
+                );
+              })}
             </div>
           )}
         </div>
@@ -342,13 +442,14 @@ export default function VideoGrid({
       </div>
 
       <div style={styles.bottomBar}>
-        <button onClick={handleInvite} style={styles.btn}>
+        <button onClick={handleInvite} style={styles.btn} title="Add Guest / Invite">
           <IconInvite />
         </button>
 
         <button
           onClick={() => setCamOn((v) => !v)}
           style={camOn ? styles.btnOn : styles.btnOff}
+          title={camOn ? "Turn camera off" : "Turn camera on"}
         >
           <IconCam />
         </button>
@@ -356,11 +457,22 @@ export default function VideoGrid({
         <button
           onClick={() => setMicOn((v) => !v)}
           style={micOn ? styles.btnOn : styles.btnOff}
+          title={micOn ? "Mute microphone" : "Unmute microphone"}
         >
           <IconMic off={!micOn} />
         </button>
 
-        <button onClick={endCall} style={styles.btnEnd}>
+        {startScreenShare && (
+          <button
+            onClick={isScreenSharing ? stopScreenShare : startScreenShare}
+            style={isScreenSharing ? styles.btnOn : styles.btn}
+            title={isScreenSharing ? "Stop sharing screen" : "Share screen"}
+          >
+            <IconScreenShare />
+          </button>
+        )}
+
+        <button onClick={endCall} style={styles.btnEnd} title="End Call">
           <IconEnd />
         </button>
       </div>
@@ -369,7 +481,7 @@ export default function VideoGrid({
         <div style={styles.modalOverlay} onClick={() => setIsInviteOpen(false)}>
           <div style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
             <div style={styles.modalHeader}>
-              <span style={styles.modalTitle}>Invite Guest</span>
+              <span style={styles.modalTitle}>Invite Guests</span>
               <button onClick={() => setIsInviteOpen(false)} style={styles.modalCloseBtn}>
                 <IconClose />
               </button>
@@ -377,48 +489,81 @@ export default function VideoGrid({
             
             <div style={styles.modalBody}>
               <p style={styles.modalText}>
-                Enter your guest's name below to generate a personalized invite link.
+                Create invite links for your guests and track their connection status live.
               </p>
               
-              <div style={styles.inputGroup}>
-                <label style={styles.inputLabel}>Guest Name</label>
+              <div style={styles.modalAddRow}>
                 <input
-                  value={guestNameInput}
-                  onChange={(e) => setGuestNameInput(e.target.value)}
-                  placeholder="e.g. Jane"
-                  style={styles.modalInput}
+                  value={newGuestName}
+                  onChange={(e) => setNewGuestName(e.target.value)}
+                  placeholder="Guest name (e.g. Sarah)"
+                  style={styles.modalInputRow}
+                  onKeyDown={(e) => e.key === "Enter" && handleAddGuest()}
                   autoFocus
                 />
-              </div>
-
-              <div style={styles.inputGroup}>
-                <label style={styles.inputLabel}>Invite Link</label>
-                <div style={styles.urlBoxContainer}>
-                  <input
-                    readOnly
-                    value={generatedInviteUrl}
-                    style={styles.urlBox}
-                    onClick={(e) => e.target.select()}
-                  />
-                </div>
-              </div>
-
-              <div style={styles.modalActions}>
-                <button
-                  onClick={handleCopyLink}
-                  style={copied ? styles.modalBtnCopied : styles.modalBtnPrimary}
-                >
-                  {copied ? <IconCheck /> : <IconCopy />}
-                  {copied ? "Copied!" : "Copy Invite Link"}
+                <button onClick={handleAddGuest} style={styles.modalAddBtn}>
+                  + Add
                 </button>
-
-                {navigator.share && (
-                  <button onClick={handleShareLink} style={styles.modalBtnSecondary}>
-                    <IconShare />
-                    Share Link
-                  </button>
-                )}
               </div>
+
+              {invitedGuests.length > 0 && (
+                <div style={styles.guestListContainer}>
+                  <label style={styles.inputLabel}>Invited Guests</label>
+                  <div style={styles.guestList}>
+                    {invitedGuests.map((guest) => {
+                      const status = getGuestStatus(guest.name);
+                      const isCopied = copiedGuestId === guest.id;
+                      
+                      return (
+                        <div key={guest.id} style={styles.guestRow}>
+                          <div style={styles.guestInfo}>
+                            <span style={styles.guestName}>{guest.name}</span>
+                            <span style={{
+                              ...styles.guestStatusBadge,
+                              color: status === "connected" ? "#10b981" :
+                                     status === "connecting" ? "#f59e0b" :
+                                     status === "disconnected" ? "#ef4444" : "#71717a",
+                              background: status === "connected" ? "rgba(16,185,129,0.1)" :
+                                          status === "connecting" ? "rgba(245,158,11,0.1)" :
+                                          status === "disconnected" ? "rgba(239,68,68,0.1)" : "rgba(255,255,255,0.04)",
+                            }}>
+                              {status}
+                            </span>
+                          </div>
+                          
+                          <div style={styles.guestActions}>
+                            <button
+                              onClick={() => handleCopyGuestLink(guest)}
+                              style={styles.guestActionBtn}
+                              title="Copy personalized link"
+                            >
+                              {isCopied ? <IconCheck /> : <IconCopy />}
+                            </button>
+                            
+                            {navigator.share && (
+                              <button
+                                onClick={() => handleShareGuestLink(guest)}
+                                style={styles.guestActionBtn}
+                                title="Share link"
+                              >
+                                <IconShare />
+                              </button>
+                            )}
+                            
+                            <button
+                              onClick={() => handleRemoveGuest(guest.id)}
+                              style={styles.guestActionBtnDelete}
+                              title="Remove invite"
+                            >
+                              <IconTrash />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -427,11 +572,17 @@ export default function VideoGrid({
   );
 }
 
-function Tile({ children, label, styles }) {
+function Tile({ children, label, styles, micActive = true, camActive = true }) {
   return (
     <div style={styles.cell}>
       <div style={styles.tile}>
-        <div style={styles.namePill}>{label}</div>
+        <div style={styles.namePill}>
+          <span style={{ verticalAlign: "middle" }}>{label}</span>
+          <span style={{ marginLeft: 8, display: "inline-flex", gap: 4, alignItems: "center", verticalAlign: "middle" }}>
+            {!micActive && <IconMicMiniMuted />}
+            {!camActive && <IconCamMiniMuted />}
+          </span>
+        </div>
         {children}
       </div>
     </div>
@@ -842,6 +993,143 @@ const getStyles = (brand) => ({
     gap: 8,
     transition: "background 0.2s",
   },
+  hudContainer: {
+    position: "absolute",
+    top: 20,
+    left: "50%",
+    transform: "translateX(-50%)",
+    display: "flex",
+    gap: 12,
+    zIndex: 999,
+  },
+  hudPill: {
+    background: "rgba(9, 9, 11, 0.8)",
+    backdropFilter: "blur(12px)",
+    WebkitBackdropFilter: "blur(12px)",
+    border: "1px solid rgba(255, 255, 255, 0.08)",
+    padding: "6px 12px",
+    borderRadius: 999,
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.25)",
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: "50%",
+    boxShadow: "0 0 8px currentColor",
+  },
+  hudText: {
+    fontSize: 12,
+    fontWeight: 700,
+    color: "white",
+    letterSpacing: "-0.01em",
+  },
+  modalAddRow: {
+    display: "flex",
+    gap: 10,
+    width: "100%",
+  },
+  modalInputRow: {
+    flex: 1,
+    padding: "12px 14px",
+    borderRadius: 12,
+    background: "rgba(0,0,0,0.3)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    color: "white",
+    outline: "none",
+    fontSize: 14,
+    boxSizing: "border-box",
+  },
+  modalAddBtn: {
+    padding: "0 20px",
+    borderRadius: 12,
+    background: brand.primaryColor,
+    color: "black",
+    border: "none",
+    fontWeight: 700,
+    fontSize: 14,
+    cursor: "pointer",
+    transition: "transform 0.1s, opacity 0.2s",
+  },
+  guestListContainer: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    marginTop: 10,
+  },
+  guestList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    maxHeight: 200,
+    overflowY: "auto",
+    paddingRight: 4,
+  },
+  guestRow: {
+    background: "rgba(255, 255, 255, 0.03)",
+    border: "1px solid rgba(255, 255, 255, 0.06)",
+    borderRadius: 12,
+    padding: "10px 14px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    boxSizing: "border-box",
+  },
+  guestInfo: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    minWidth: 0,
+  },
+  guestName: {
+    fontSize: 14,
+    fontWeight: 700,
+    color: "white",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  guestStatusBadge: {
+    fontSize: 10,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    padding: "2px 8px",
+    borderRadius: 99,
+    letterSpacing: "0.03em",
+  },
+  guestActions: {
+    display: "flex",
+    gap: 6,
+  },
+  guestActionBtn: {
+    background: "rgba(255, 255, 255, 0.05)",
+    border: "1px solid rgba(255, 255, 255, 0.08)",
+    borderRadius: 8,
+    color: "#a1a1aa",
+    width: 32,
+    height: 32,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+    transition: "background 0.2s, color 0.2s",
+  },
+  guestActionBtnDelete: {
+    background: "rgba(239, 68, 68, 0.05)",
+    border: "1px solid rgba(239, 68, 68, 0.15)",
+    borderRadius: 8,
+    color: "#ef4444",
+    width: 32,
+    height: 32,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+    transition: "background 0.2s, color 0.2s",
+  },
 });
 
 const IconClose = () => (
@@ -871,5 +1159,40 @@ const IconShare = () => (
     <circle cx="18" cy="19" r="3"></circle>
     <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
     <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+  </svg>
+);
+
+const IconTrash = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="3 6 5 6 21 6"></polyline>
+    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+    <line x1="10" y1="11" x2="10" y2="17"></line>
+    <line x1="14" y1="11" x2="14" y2="17"></line>
+  </svg>
+);
+
+const IconScreenShare = () => (
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+    <line x1="8" y1="21" x2="16" y2="21"></line>
+    <line x1="12" y1="17" x2="12" y2="21"></line>
+  </svg>
+);
+
+const IconMicMiniMuted = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: "middle" }}>
+    <line x1="1" y1="1" x2="23" y2="23"></line>
+    <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path>
+    <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path>
+    <line x1="12" y1="19" x2="12" y2="23"></line>
+    <line x1="8" y1="23" x2="16" y2="23"></line>
+  </svg>
+);
+
+const IconCamMiniMuted = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: "middle" }}>
+    <path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1"></path>
+    <path d="M23 7l-7 5 7 5V7z"></path>
+    <line x1="1" y1="1" x2="23" y2="23"></line>
   </svg>
 );
