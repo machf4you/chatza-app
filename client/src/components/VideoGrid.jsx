@@ -23,6 +23,10 @@ export default function VideoGrid({
   const [camOn, setCamOn] = useState(true);
   const [text, setText] = useState("");
 
+  const [isInviteOpen, setIsInviteOpen] = useState(false);
+  const [guestNameInput, setGuestNameInput] = useState("");
+  const [copied, setCopied] = useState(false);
+
   const urlGuest =
     new URLSearchParams(window.location.search).get("guest") || "";
   const isGuestLink = !!urlGuest;
@@ -103,22 +107,57 @@ export default function VideoGrid({
   };
 
   const handleInvite = () => {
-    const g = prompt("Guest name?")?.trim();
+    setIsInviteOpen(true);
+    setCopied(false);
+  };
 
-    if (inviteUrl) {
-      const url = g
-        ? `${inviteUrl}${
-            inviteUrl.includes("?") ? "&" : "?"
-          }guest=${encodeURIComponent(g)}`
-        : inviteUrl;
+  const generatedInviteUrl = useMemo(() => {
+    if (!inviteUrl) return "";
+    const g = guestNameInput.trim();
+    return g
+      ? `${inviteUrl}${
+          inviteUrl.includes("?") ? "&" : "?"
+        }guest=${encodeURIComponent(g)}`
+      : inviteUrl;
+  }, [inviteUrl, guestNameInput]);
 
-      try {
-        navigator.clipboard?.writeText(url);
-      } catch {}
-      return;
+  const handleCopyLink = () => {
+    if (!generatedInviteUrl) return;
+    try {
+      navigator.clipboard?.writeText(generatedInviteUrl).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }).catch(() => {
+        const input = document.createElement("input");
+        input.value = generatedInviteUrl;
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand("copy");
+        document.body.removeChild(input);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      });
+    } catch {
+      const input = document.createElement("input");
+      input.value = generatedInviteUrl;
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand("copy");
+      document.body.removeChild(input);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     }
+  };
 
-    copyInvite?.();
+  const handleShareLink = () => {
+    if (!generatedInviteUrl) return;
+    if (navigator.share) {
+      navigator.share({
+        title: `Join ${brand?.name || "Chatza Call"}`,
+        text: `Join my private call on ${brand?.name || "Chatza"}!`,
+        url: generatedInviteUrl,
+      }).catch(() => {});
+    }
   };
 
   // ✅ RULES:
@@ -325,6 +364,65 @@ export default function VideoGrid({
           <IconEnd />
         </button>
       </div>
+
+      {isInviteOpen && (
+        <div style={styles.modalOverlay} onClick={() => setIsInviteOpen(false)}>
+          <div style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
+            <div style={styles.modalHeader}>
+              <span style={styles.modalTitle}>Invite Guest</span>
+              <button onClick={() => setIsInviteOpen(false)} style={styles.modalCloseBtn}>
+                <IconClose />
+              </button>
+            </div>
+            
+            <div style={styles.modalBody}>
+              <p style={styles.modalText}>
+                Enter your guest's name below to generate a personalized invite link.
+              </p>
+              
+              <div style={styles.inputGroup}>
+                <label style={styles.inputLabel}>Guest Name</label>
+                <input
+                  value={guestNameInput}
+                  onChange={(e) => setGuestNameInput(e.target.value)}
+                  placeholder="e.g. Jane"
+                  style={styles.modalInput}
+                  autoFocus
+                />
+              </div>
+
+              <div style={styles.inputGroup}>
+                <label style={styles.inputLabel}>Invite Link</label>
+                <div style={styles.urlBoxContainer}>
+                  <input
+                    readOnly
+                    value={generatedInviteUrl}
+                    style={styles.urlBox}
+                    onClick={(e) => e.target.select()}
+                  />
+                </div>
+              </div>
+
+              <div style={styles.modalActions}>
+                <button
+                  onClick={handleCopyLink}
+                  style={copied ? styles.modalBtnCopied : styles.modalBtnPrimary}
+                >
+                  {copied ? <IconCheck /> : <IconCopy />}
+                  {copied ? "Copied!" : "Copy Invite Link"}
+                </button>
+
+                {navigator.share && (
+                  <button onClick={handleShareLink} style={styles.modalBtnSecondary}>
+                    <IconShare />
+                    Share Link
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -589,4 +687,189 @@ const getStyles = (brand) => ({
     background: "#dc2626",
     color: "white",
   },
+  modalOverlay: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0,0,0,0.75)",
+    backdropFilter: "blur(8px)",
+    WebkitBackdropFilter: "blur(8px)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 9999999,
+    padding: 16,
+  },
+  modalCard: {
+    background: "#09090b",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 20,
+    width: "100%",
+    maxWidth: 440,
+    boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)",
+    padding: 24,
+    display: "flex",
+    flexDirection: "column",
+    gap: 20,
+    boxSizing: "border-box",
+  },
+  modalHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderBottom: "1px solid rgba(255,255,255,0.08)",
+    paddingBottom: 14,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 800,
+    color: "white",
+  },
+  modalCloseBtn: {
+    background: "transparent",
+    border: "none",
+    color: "#a1a1aa",
+    cursor: "pointer",
+    padding: 4,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    transition: "color 0.2s",
+  },
+  modalBody: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 16,
+  },
+  modalText: {
+    fontSize: 14,
+    color: "#a1a1aa",
+    margin: 0,
+    lineHeight: 1.5,
+  },
+  inputGroup: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+  },
+  inputLabel: {
+    fontSize: 12,
+    fontWeight: 600,
+    color: "#71717a",
+    textTransform: "uppercase",
+    letterSpacing: "0.05em",
+  },
+  modalInput: {
+    width: "100%",
+    padding: "12px 14px",
+    borderRadius: 12,
+    background: "rgba(0,0,0,0.3)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    color: "white",
+    outline: "none",
+    fontSize: 14,
+    boxSizing: "border-box",
+  },
+  urlBoxContainer: {
+    display: "flex",
+    gap: 8,
+    width: "100%",
+  },
+  urlBox: {
+    flex: 1,
+    padding: "12px 14px",
+    borderRadius: 12,
+    background: "rgba(0,0,0,0.5)",
+    border: "1px solid rgba(255,255,255,0.05)",
+    color: "#a1a1aa",
+    fontSize: 13,
+    outline: "none",
+    cursor: "text",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    boxSizing: "border-box",
+  },
+  modalActions: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+    marginTop: 8,
+  },
+  modalBtnPrimary: {
+    width: "100%",
+    height: 44,
+    borderRadius: 9999,
+    background: brand.primaryColor,
+    color: "black",
+    border: "none",
+    fontWeight: 700,
+    fontSize: 14,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    transition: "transform 0.1s, opacity 0.2s",
+  },
+  modalBtnCopied: {
+    width: "100%",
+    height: 44,
+    borderRadius: 9999,
+    background: "#10b981",
+    color: "white",
+    border: "none",
+    fontWeight: 700,
+    fontSize: 14,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    transition: "transform 0.1s, opacity 0.2s",
+  },
+  modalBtnSecondary: {
+    width: "100%",
+    height: 44,
+    borderRadius: 9999,
+    background: "rgba(255,255,255,0.06)",
+    color: "white",
+    border: "1px solid rgba(255,255,255,0.1)",
+    fontWeight: 600,
+    fontSize: 14,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    transition: "background 0.2s",
+  },
 });
+
+const IconClose = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="18" y1="6" x2="6" y2="18"></line>
+    <line x1="6" y1="6" x2="18" y2="18"></line>
+  </svg>
+);
+
+const IconCopy = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+  </svg>
+);
+
+const IconCheck = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="20 6 9 17 4 12"></polyline>
+  </svg>
+);
+
+const IconShare = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="18" cy="5" r="3"></circle>
+    <circle cx="6" cy="12" r="3"></circle>
+    <circle cx="18" cy="19" r="3"></circle>
+    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+  </svg>
+);
