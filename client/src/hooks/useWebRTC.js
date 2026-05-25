@@ -2,8 +2,29 @@
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 
-const SIGNALING_URL =
-  import.meta.env.VITE_SIGNALING_URL || "http://localhost:3000";
+const getSignalingUrl = () => {
+  const envUrl = import.meta.env.VITE_SIGNALING_URL;
+  
+  // If we are running in production, use the environment variable
+  if (import.meta.env.PROD) {
+    return envUrl || window.location.origin;
+  }
+
+  // In local development:
+  // If the window is loaded via localhost or a LAN IP, connect directly to port 3000 on that same host
+  const hostname = window.location.hostname;
+  const isLocalHost = hostname === "localhost" || hostname === "127.0.0.1";
+  const isLan = hostname.startsWith("192.168.") || hostname.startsWith("10.") || hostname.startsWith("172.");
+
+  if (isLocalHost || isLan) {
+    return `http://${hostname}:3000`;
+  }
+
+  // Fallback to the environment variable or localhost
+  return envUrl || "http://localhost:3000";
+};
+
+const SIGNALING_URL = getSignalingUrl();
 
 const ICE_STUN_URL =
   import.meta.env.VITE_ICE_STUN_URL || "stun:stun.l.google.com:19302";
@@ -253,7 +274,7 @@ export function useWebRTC(roomId, { name } = {}) {
       }
 
       const socket = io(SIGNALING_URL, {
-        transports: ["websocket"],
+        transports: ["websocket", "polling"],
         reconnection: true,
       });
       socketRef.current = socket;
